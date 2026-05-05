@@ -11,21 +11,33 @@
 // module.exports = redis;
 const Redis = require('ioredis');
 
-const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
-  retryStrategy: (times) => {
-    return Math.min(times * 100, 2000); // backoff
-  },
+let client;
 
-  maxRetriesPerRequest: 3,   // 🔥 critical fix
-  connectTimeout: 10000,     // fail fast
+if (process.env.REDIS_URL) {
+  client = new Redis(process.env.REDIS_URL, {
+    tls: process.env.REDIS_URL.startsWith('rediss://') ? {} : undefined,
+    maxRetriesPerRequest: 3,
+    retryStrategy(times) {
+      if (times > 3) return null; // stop retrying after 3 attempts
+      return Math.min(times * 200, 1000);
+    },
+    lazyConnect: true,
+  });
+} else {
+  // Local fallback
+  client = new Redis({
+    host: '127.0.0.1',
+    port: 6379,
+    maxRetriesPerRequest: 3,
+    retryStrategy(times) {
+      if (times > 3) return null;
+      return Math.min(times * 200, 1000);
+    },
+    lazyConnect: true,
+  });
+}
 
-  lazyConnect: false,        // 🔥 connect immediately
-});
+client.on('connect', () => console.log('✅ Redis connected'));
+client.on('error', err => console.warn('⚠️ Redis error:', err.message));
 
-redis.on('connect', () => console.log('Redis connected'));
-
-redis.on('error', (err) => {
-  console.error('Redis error:', err); // full error
-});
-
-module.exports = redis;
+module.exports = client;
