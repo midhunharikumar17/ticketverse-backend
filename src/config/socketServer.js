@@ -1,35 +1,49 @@
-const { Server } = require('socket.io');
+const { Server }        = require('socket.io');
 const { createAdapter } = require('@socket.io/redis-adapter');
-const { createClient } = require('redis');
-const { verifyAccessToken } = require('../utils/jwtUtils');
+const { createClient }  = require('redis');
 
 let io;
 
 async function initSocketServer(httpServer) {
   io = new Server(httpServer, {
     cors: {
-      origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+      origin:      process.env.FRONTEND_URL || 'http://localhost:5173',
       credentials: true,
     },
   });
 
-  // Redis adapter for multi-process scaling
-  try {
-    const pubClient = createClient({ url: process.env.REDIS_URL || 'redis://localhost:6379' });
-    const subClient = pubClient.duplicate();
-    await Promise.all([pubClient.connect(), subClient.connect()]);
-    io.adapter(createAdapter(pubClient, subClient));
-    console.log('Socket.IO Redis adapter connected');
-  } catch (err) {
-    console.warn('Socket.IO Redis adapter failed, using in-memory:', err.message);
+  // Redis adapter for Socket.IO
+  if (process.env.REDIS_URL) {
+    try {
+      const tlsOptions = process.env.REDIS_URL.startsWith('rediss://')
+        ? { socket: { tls: true, rejectUnauthorized: false } }
+        : {};
+
+      const pubClient = createClient({
+        url: process.env.REDIS_URL,
+        ...tlsOptions,
+      });
+      const subClient = pubClient.duplicate();
+
+      pubClient.on('error', e => console.error('Socket pub error:', e.message));
+      subClient.on('error', e => console.error('Socket sub error:', e.message));
+
+      await Promise.all([pubClient.connect(), subClient.connect()]);
+      io.adapter(createAdapter(pubClient, subClient));
+      console.log('✅ Socket.IO Redis adapter connected');
+    } catch (e) {
+      console.warn('⚠️  Socket.IO Redis adapter failed, using in-memory:', e.message);
+    }
   }
 
-  // Authenticate every socket connection
+  // Auth middleware
   io.use((socket, next) => {
     const token = socket.handshake.auth?.token;
     if (!token) return next(new Error('Authentication required'));
     try {
-      socket.user = verifyAccessToken(token);
+      const { verifyAccessToken } = require('../utils/jwtUtils');
+      const payload = verifyAccessToken(token);
+      socket.user = payload;
       next();
     } catch {
       next(new Error('Invalid token'));
@@ -37,18 +51,10 @@ async function initSocketServer(httpServer) {
   });
 
   io.on('connection', (socket) => {
-    // Join personal notification room automatically
-    socket.join(`user:${socket.user.sub}`);
-    console.log(`Socket connected: ${socket.user.sub}`);
-
     require('../sockets/seatHandlers')(io, socket);
     require('../sockets/sessionHandlers')(io, socket);
-    require('../sockets/chatHandlers')(io, socket);
     require('../sockets/notificationSocketHandlers')(io, socket);
-
-    socket.on('disconnect', () => {
-      console.log(`Socket disconnected: ${socket.user.sub}`);
-    });
+    require('../sockets/chatHandlers')(io, socket);
   });
 
   return io;

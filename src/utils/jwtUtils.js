@@ -3,13 +3,13 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-function getPrivateKey() {
-  return fs.readFileSync(path.resolve(process.env.JWT_PRIVATE_KEY_PATH));
-}
+const privateKey = process.env.JWT_PRIVATE_KEY
+  ? process.env.JWT_PRIVATE_KEY.replace(/\\n/g, '\n')
+  : require('fs').readFileSync(process.env.JWT_PRIVATE_KEY_PATH || './keys/private.pem', 'utf8');
 
-function getPublicKey() {
-  return fs.readFileSync(path.resolve(process.env.JWT_PUBLIC_KEY_PATH));
-}
+const publicKey = process.env.JWT_PUBLIC_KEY
+  ? process.env.JWT_PUBLIC_KEY.replace(/\\n/g, '\n')
+  : require('fs').readFileSync(process.env.JWT_PUBLIC_KEY_PATH || './keys/public.pem', 'utf8');
 
 function signAccessToken(payload) {
   return jwt.sign(payload, getPrivateKey(), {
